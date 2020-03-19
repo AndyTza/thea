@@ -27,7 +27,7 @@ Things that need ot be extracted
 # Function that Reads in connection to .nc file and outputs relevant data in tibble format
 nc_extract_no2dat <- function(nc_conn) {
   # Get Relevant File attribtues
-  nc_attr <- ncatt_get(nc_conn, 0) %>% as_tibble() %>% select(tracking_id,id,time_coverage_start,time_coverage_end)
+  nc_attr <- suppressMessages(ncatt_get(nc_conn,0)) %>% as_tibble() %>% select(tracking_id,id,time_coverage_start,time_coverage_end)
   # List relevant variables to extract
   varnames <- c(
     "DETAILED_RESULTS/nitrogendioxide_stratospheric_column",
