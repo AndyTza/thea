@@ -17,14 +17,16 @@ count_path ='dhus/odata/v1/Products/$count'
 query_path = 'dhus/odata/v1/Products/'
 
 # S5P credentials 
-username = 's5pguest'
-pwd = 's5pguest'
+username = ''
+pwd = ''
 
 # Create list of parameters to pass on to query later
 parameter_list <- list(    
-    `$filter` = "substringof('S5P_OFFL_L2__NO2',Name) and year(ContentDate/End) eq 2020 and month(ContentDate/End) le 3"
+    `$filter` = "substringof('L2__NO2',Name) and year(ContentDate/End) eq 2020 and month(ContentDate/End) le 3"
     )
-
+```
+ 
+```{r}
 # Find the number of results yielded by the API query 
 count_resp <- GET(
   modify_url(baseurl, path = count_path), 
@@ -33,14 +35,6 @@ count_resp <- GET(
   )
 results_count <- content(count_resp)
 results_count
-
-# query_resp = GET(
-#   modify_url(baseurl, path = query_path), 
-#   authenticate(username, pwd),
-#   query = append(parameter_list, list(`$format` = 'text/csv'))
-#   )
-# query_csv <- content(query_resp)
-# query_csv
 
 # Create Function that takes in parameters for a GET request and returns the results of the API query
 NO2_retreive <- function(skip_count = 0L, query_params = parameter_list) {
@@ -67,7 +61,7 @@ while (nrow(NO2_resp) == 50) {
     NO2_resp
     )
   counter = counter + 50
-  Sys.sleep(0.5) #Being nice to server
+  # Sys.sleep(0.5) #Being nice to server
   print(paste("Fetched",nrow(NO2_tbl),"results out of", results_count))
 }
 NO2_tbl
@@ -79,45 +73,20 @@ NO2_output <- NO2_tbl %>%
   mutate(downloadURL = paste0("https://s5phub.copernicus.eu/dhus/odata/v1/Products('",Id,"')/$value") ) %>% 
   filter(str_detect(Name,"_OFFL"))
   
-NO2_output %>% 
-  split(rep(1:ceiling(nrow(.)/50), each=50, length.out=nrow(.)))
+NO2_output %>%
   write_csv("NO2_URL_list.csv")
-```
-```{r}
-baseurl = 'https://s5phub.copernicus.eu/dhus/odata/v1/Products'
-product_path ="dhus/odata/v1/Products('3cc7db10-f17a-439b-9539-2f1af4c1f56f')/$value"
-# rr <- system2(command='curl -u s5pguest:s5pguest "https://s5phub.copernicus.eu/dhus/odata/v1/Products(\'3cc7db10-f17a-439b-9539-2f1af4c1f56f\')/\\$value" > "S5P_OFFL_L2__NO2____20200111T111450_20200111T125620_11635_01_010302_20200114T195009"  ')
-product_resp = GET(
-  modify_url(baseurl, path = product_path), 
-  authenticate(username, pwd)
-  )
-content(product_resp) %>% write("fnametest.nc")
 
-```
+# Read in cached list (from python) of files that can read
+# Python is used curl and ensure that the curl results can read in properly. 
+goodfiles = read_csv("../gfnames.csv",col_names = "fname") %>% 
+  mutate(fname = str_replace(basename(fname)," .*",'')) 
 
-## Facilitate 
-```{r}
+# Get list of nc files to retreive
 NO2_output %>% 
+  anti_join(goodfiles, by = c("Name"="fname")) %>% 
   mutate(curl_cmd = paste0(
   "curl -u ", username,":", pwd," ", downloadURL," > ",Name)
-  ) %>% 
-  select(curl_cmd)
-
-nc <- nc_open("S5P_OFFL_L2__NO2____20200105T112716_20200105T130846_11550_01_010302_20200107T042413")
-mfactor = ncatt_get(nc, "DETAILED_RESULTS/nitrogendioxide_total_column", 
-                    "multiplication_factor_to_convert_to_molecules_percm2")
-fillvalue = ncatt_get(nc, "DETAILED_RESULTS/nitrogendioxide_total_column",
-                      "_FillValue")
-no2tc <- ncvar_get(nc, "DETAILED_RESULTS/nitrogendioxide_total_column")  
-  # apply multiplication factor for unit conversion
-no2tc <- no2tc*mfactor$value
-lat <- ncvar_get(nc, "PRODUCT/latitude")
-lon <- ncvar_get(nc, "PRODUCT/longitude")
-# concatenate the new data to the global data frame
-no2df = data.frame(lat=as.vector(lat),
-             lon=as.vector(lon),
-             no2tc=as.vector(no2tc))
-
+  ) %>% View
 ```
 
 
