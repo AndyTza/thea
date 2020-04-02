@@ -14,9 +14,11 @@ library(ncdf4)
 library(tidyverse)
 library(RSQLite)
 library(DBI)
+library(feather)
+library(RMariaDB)
 ```
 
-Things that need ot be extracted 
+Things that need ot be extracted (WIP)
 + Tracking ID
 + id
 + Time Coverage Start
@@ -24,10 +26,17 @@ Things that need ot be extracted
 + nitrogendioxide_total_column
 
 ```{r functions}
+# Function that takes in any function as input and runs the function while supress printing messages
+quiet <- function(x) { 
+  sink(tempfile()) 
+  on.exit(sink()) 
+  invisible(force(x)) 
+}
+
 # Function that Reads in connection to .nc file and outputs relevant data in tibble format
 nc_extract_no2dat <- function(nc_conn) {
   # Get Relevant File attribtues
-  nc_attr <- suppressMessages(ncatt_get(nc_conn,0)) %>% as_tibble() %>% select(tracking_id,id,time_coverage_start,time_coverage_end)
+  nc_attr <- quiet(ncatt_get(nc_conn,0)) %>% as_tibble() %>% select(tracking_id,id,time_coverage_start,time_coverage_end)
   # List relevant variables to extract
   varnames <- c(
     "DETAILED_RESULTS/nitrogendioxide_stratospheric_column",
@@ -53,71 +62,100 @@ nc_extract_no2dat <- function(nc_conn) {
 
 # Data Collect
 Read through nc files, filter out data within specified region, and save results to SQL db. 
-```{r Washington Filter}
-con <- dbConnect(RSQLite::SQLite(), "wa_no2_db.sqlite")
-for (fname in list.files() %>% str_subset("S5P_OFFL_L2") ) {
-  
-  tryCatch({
-    print(fname)
-    no2dat <- nc_open(fname) %>% 
-    nc_extract_no2dat() %>% 
+```{r WA Insert To DB}
+# Connect to Database
+no2db <- dbConnect(
+  RMariaDB::MariaDB(), 
+  user = rstudioapi::askForPassword("Database user"),
+  password = rstudioapi::askForPassword("Database password"),
+  dbname = db, 
+  port = dbport,
+  host = localhost)
+
+# Find feather files (converted from .nc files in python) 
+feather_path = "/Volumes/pathtofeatherfiles/"
+feather_fnames = list.files(feather_path,full.names = TRUE) %>% str_subset("feather")
+
+# Create table with template columns
+no2dat <- feather_fnames %>% 
+  first %>% 
+  read_feather() %>% 
+  slice(0)
+# Create table within database
+dbWriteTable(no2db, "WA_NO2", no2dat,overwrite = TRUE)
+dbReadTable(no2db, "WA_NO2")
+dbListTables(no2db)
+
+# loop through each file and append to database
+for (fname in feather_fnames) {
+    cat("Opening :",which(feather_fnames == fname),"of",length(feather_fnames))
+    feath_dat <- read_feather(fname) %>% 
     filter(
-      between(`PRODUCT/latitude`, -135,-110),
-      between(`PRODUCT/longitude`, 35,55)
+      between(lats, 35,55),
+      between(lons, -135,-110)
     )
-    dbWriteTable(con, "NO2", no2dat, row.names = FALSE, append = TRUE)
-  }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+    cat(" --",nrow(feath_dat), "results!")
+    dbAppendTable(no2db,"WA_NO2",feath_dat)
+    cat(" --","Appended! \n")
 }
+
+```
+ 
+ 
+
+
+```{r Collect WA subset}
+# Obtain slice of data from DB
+week1dat <- tbl(no2db, "WA_NO2") %>% 
+  # filter(id %in% test_days) %>%
+  filter(str_detect(id,"202001")) %>%
+  # mutate(time_coverage_end = as.Date(time_coverage_end))
+  collect()
 ```
 
 
 # Visualize
-```{r}
-#   PlotRegion <- function(df, latlon, title) {
-#   # Plot the given dataset over a geographic region.
-#   #
-#   # Args:
-#   #   df: The dataset, should include the no2tc, lat, lon columns
-#   #   latlon: A vector of four values identifying the botton-left and top-right corners 
-#   #           c(latmin, latmax, lonmin, lonmax)
-#   #   title: The plot title
-#   
-#   # subset the data frame first
-#   df_sub <- subset(df, no2tc!=fillvalue & lat>latlon[1] & lat<latlon[2] & lon>latlon[3] & lon<latlon[4])
-#   subtitle = paste("Data min =", formatC(min(df_sub$no2tc, na.rm=T), format="e", digits=2), 
-#                    "max =", formatC(max(df_sub$no2tc, na.rm=T), format="e", digits=2))
-# 
-#   ggplot(df_sub, aes(y=lat, x=lon, fill=no2tc)) + 
-#     geom_tile(width=1, height=1) +
-#     borders('world', xlim=range(df_sub$lon), ylim=range(df_sub$lat), 
-#             colour='gray90', size=.2) + 
-#     theme_light() + 
-#     theme(panel.ontop=TRUE, panel.background=element_blank()) +
-#     scale_fill_distiller(palette='Spectral', 
-#                          limits=c(quantile(df_sub, .7, na.rm=T), 
-#                                   quantile(df_sub, .999, na.rm=T))) +
-#     coord_quickmap(xlim=c(latlon[3], latlon[4]), ylim=c(latlon[1], latlon[2])) +
-#     labs(title=title, subtitle=subtitle, 
-#          x="Longitude", y="Latitude", 
-#          fill=expression(molecules~cm^-2))
-#   }
+```{r }
+# Function for plotting modified from blog
+PlotRegion <- function(df_sub, title = "NO2 Concentration in WA") {
+  # Plot the given dataset over a geographic region.
+  #
+  # Args:
+  #   df: The dataset, should include the no2tc, lat, lon columns
+  #   latlon: A vector of four values identifying the botton-left and top-right corners
+  #           c(latmin, latmax, lonmin, lonmax)
+  #   title: The plot title
+
+  # subset the data frame first
+  # df_sub <- subset(df, no2tc!=fillvalue & lat>latlon[1] & lat<latlon[2] & lon>latlon[3] & lon<latlon[4])
+  # df_sub <- df_sub %>% filter(!is.na(no2))
+  subtitle = paste("Data min =", formatC(min(df_sub$no2, na.rm=T), format="e", digits=2),
+                   "max =", formatC(max(df_sub$no2, na.rm=T), format="e", digits=2))
+
+  ggplot(df_sub, aes(y=lats, x=lons, fill=no2)) +
+    geom_tile(width=1, height=1) +
+    borders('world', xlim=range(df_sub$lons), ylim=range(df_sub$lats),
+            colour='gray90', size=.2) +
+    theme_light() +
+    theme(panel.ontop=TRUE, panel.background=element_blank()) +
+    scale_fill_distiller(palette='Spectral',
+                         limits = c(1.024826e-05  ,0.0007860105 )) +
+                         # limits=c(quantile(df_sub$no2, .7, na.rm=T),
+                         #          quantile(df_sub$no2, .999, na.rm=T))) +
+    coord_quickmap(xlim=c(-127, -117), ylim=c(43, 53)) +
+    labs(title=df_sub$time_coverage_end %>% first, subtitle=subtitle,
+         x="Longitude", y="Latitude" )#,
+         # fill=expression(molecules~cm^-2))
+  }
 # eu.coords = c(34, 60, -15, 35)
-# PlotRegion(no2, eu.coords, expression(NO[2]~total~vertical~column~over~Europe))
+week1dat$no2 %>% min(na.rm = T)
+week1dat %>% 
+  mutate(time_coverage_end = as.Date(time_coverage_end)) %>% 
+  group_by(time_coverage_end) %>% 
+  group_split() %>% 
+  # .[4:30] %>%
+  map(PlotRegion)
+# stars::cur
 ```
 
-```{r}
- # ggplot(no2df, aes(y=lat, x=lon, fill=no2tc)) + 
- #    geom_tile(width=1, height=1) +
- #    borders('world', xlim=range(no2df$lon), ylim=range(no2df$lat), 
- #            colour='gray90', size=.2) + 
- #    theme_light() + 
- #    theme(panel.ontop=TRUE, panel.background=element_blank()) +
- #    scale_fill_distiller(palette='Spectral', 
- #                         limits=c(quantile(no2df, .7, na.rm=T), 
- #                                  quantile(no2df, .999, na.rm=T))) +
- #    coord_quickmap() +
- #    labs(title="title", subtitle="subtitle", 
- #         x="Longitude", y="Latitude", 
- #         fill=expression(molecules~cm^-2))
-```
 
