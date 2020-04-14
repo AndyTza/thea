@@ -16,6 +16,9 @@ library(RSQLite)
 library(DBI)
 library(feather)
 library(RMariaDB)
+
+library(reticulate)
+use_python("/usr/local/bin/python3", required = TRUE)
 ```
 
 Things that need ot be extracted (WIP)
@@ -59,6 +62,16 @@ nc_extract_no2dat <- function(nc_conn) {
 }
 ```
 
+# Data Import 
+```{r}
+fname <- "../data/S5P_OFFL_L2__NO2____20200105T112716_20200105T130846_11550_01_010302_20200107T042413"
+nc <- nc_open(fname)
+ncdat <- nc_extract_no2dat(nc)
+
+fname2 <- "../data/S5P_OFFL_L2__NO2____20200119T203333_20200119T221503_11754_01_010302_20200124T140330.zip"
+nc2 <- nc_open(fname2)
+ncdat2 <- nc_extract_no2dat(nc2)
+```
 
 # Data Collect
 Read through nc files, filter out data within specified region, and save results to SQL db. 
@@ -158,4 +171,82 @@ week1dat %>%
 # stars::cur
 ```
 
+
+```{python}
+from sentinelsat import SentinelAPI, read_geojson, geojson_to_wkt
+from datetime import date
+import os
+print("hello")
+```
+
+```{r source}
+library(reticulate)
+use_python("/usr/local/bin/python3", required = TRUE)
+pypath = "/Users/etiowousoro/Documents/Analytics/thea/scripts/s5p_analyze.py"
+# source_python(pypath)
+
+make_no2viz <- function(no2_dataframe) {
+  no2_dataframe = no2_dataframe %>% 
+    rename(no2 = `value`, lats = latitude, lons = longitude)
+  no2_dataframe %>% 
+  ggplot( aes(y=lats, x=lons, fill=no2)) +
+    geom_tile(width=1, height=1) +
+    scale_fill_distiller(palette='Spectral') + 
+    borders('world', 
+            xlim=range(as.numeric(no2_dataframe$lons)),
+            ylim=range(as.numeric(no2_dataframe$lats)),
+            colour='gray90', size=.2) +
+    theme_light() +
+    theme(panel.ontop=TRUE, panel.background=element_blank()) +
+    scale_fill_distiller(palette='Spectral',) +
+                         # limits = c(1.024826e-05  ,0.0007860105 )) +
+                         # limits=c(quantile(df_sub$no2, .7, na.rm=T),
+                         #          quantile(df_sub$no2, .999, na.rm=T))) +
+    coord_quickmap(xlim=c(-127, -117), ylim=c(43, 53)) +
+    labs(title=no2_dataframe$time_coverage_end %>% first, subtitle=no2_dataframe$tracking_id %>% first,
+         x="Longitude", y="Latitude" )#,
+}
+library(sf)
+# library(rnaturalearth)
+
+make_no2viz(datafiltered)
+make_no2viz(dataraw)
+```
+
+
+```{r}
+zippath <- "../data/"
+zippath %>% 
+  list.files(full.names = TRUE) %>% 
+  str_subset("zip") %>% 
+  # first %>% 
+  map(nc_open) %>% 
+  map(nc_extract_no2dat) %>% 
+  map(make_no2viz)
+  
+  
+nc2 <- nc_open(fname2)
+ncdat2 <- nc_extract_no2dat(nc2)
+# ncdat2 %>% 
+make_no2viz <- function(no2_dataframe) {
+  no2_dataframe %>% 
+  rename(no2 = `DETAILED_RESULTS/nitrogendioxide_total_column`, lats = `PRODUCT/latitude`, lons = `PRODUCT/longitude`) %>%  
+  ggplot( aes(y=lats, x=lons, fill=no2)) +
+    geom_tile(width=1, height=1) +
+    scale_fill_distiller(palette='Spectral') + 
+    borders('world', 
+            xlim=range(as.numeric(no2_dataframe$`PRODUCT/longitude`)),
+            ylim=range(as.numeric(no2_dataframe$`PRODUCT/latitude`)),
+            colour='gray90', size=.2) +
+    theme_light() +
+    theme(panel.ontop=TRUE, panel.background=element_blank()) +
+    scale_fill_distiller(palette='Spectral',
+                         limits = c(1.024826e-05  ,0.0007860105 )) +
+                         # limits=c(quantile(df_sub$no2, .7, na.rm=T),
+                         #          quantile(df_sub$no2, .999, na.rm=T))) +
+    coord_quickmap(xlim=c(-127, -117), ylim=c(43, 53)) +
+    labs(title=no2_dataframe$time_coverage_end %>% first, subtitle=no2_dataframe$tracking_id %>% first,
+         x="Longitude", y="Latitude" )#,
+}
+```
 
